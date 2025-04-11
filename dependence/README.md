@@ -9,7 +9,7 @@ This directory contains the code and results for generating the plot showing the
 #SBATCH --time=7-0
 #SBATCH --mem=10G
 #SBATCH --cpus-per-task=1
-#SBATCH --array=0-2280
+#SBATCH --array=0-45
 arrayNum="${SLURM_ARRAY_TASK_ID}"
 source /your_path/venv/bin/activate
 python /your_path/dependence.py measure $arrayNum

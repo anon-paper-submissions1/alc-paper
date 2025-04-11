@@ -1,0 +1,46 @@
+Anonymity Loss Coefficient Summary
+    insurance.15
+Anonymity Level: VERY STRONG
+    Consider reducing the strength of the anonymization so as to improve data quality.
+
+3 columns used as secret columns:
+  GoodStudent
+  Age
+  SocioEcon
+
+27 columns used as known columns:
+  Age
+  SocioEcon
+  RiskAversion
+  VehicleYear
+  ThisCarDam
+  RuggedAuto
+  Accident
+  MakeModel
+  DrivQuality
+  Mileage
+  Antilock
+  DrivingSkill
+  SeniorTrain
+  ThisCarCost
+  Theft
+  CarValue
+  HomeBase
+  AntiTheft
+  PropCost
+  OtherCarCost
+  OtherCar
+  MedCost
+  Cushioning
+  Airbag
+  ILiCost
+  DrivHist
+  GoodStudent
+
+Analyzed known column / secret column combinations: 3
+Perfect anonymity:     3 (100.0%)
+ Strong anonymity:     0 (0.0%)
+          At risk:     0 (0.0%)
+   Poor anonymity:     0 (0.0%)
+     No anonymity:     0 (0.0%)
+
