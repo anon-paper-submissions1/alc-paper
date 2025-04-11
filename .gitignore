@@ -176,4 +176,5 @@ cython_debug/
 # Mine
 **/work_files/
 **/slurm_out/
+**/plots/
 all_secret_known.parquet
