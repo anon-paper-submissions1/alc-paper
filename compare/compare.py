@@ -49,8 +49,36 @@ def do_work(job_num):
 def do_plot():
     pass
 
+import os
+import pandas as pd
+
 def do_gather():
-    pass
+    # List to store dataframes
+    dataframes = []
+    
+    # Recursively walk through the directory
+    for root, _, files in os.walk(work_files_dir):
+        for file in files:
+            if file == "summary_secret_known.csv":
+                # Construct the full file path
+                file_path = os.path.join(root, file)
+                
+                # Read the file into a dataframe
+                df = pd.read_csv(file_path)
+                
+                # Append the dataframe to the list
+                dataframes.append(df)
+    
+    print(f"Found {len(dataframes)} files named 'summary_secret_known.csv'.")
+    # Concatenate all dataframes
+    if dataframes:
+        combined_df = pd.concat(dataframes, ignore_index=True)
+        
+        # Write the combined dataframe to a parquet file
+        combined_df.to_parquet("all_secret_known.parquet", index=False)
+        print("Parquet file written: all_secret_known.parquet")
+    else:
+        print("No files named 'summary_secret_known.csv' were found.")
 
 def main():
     if len(sys.argv) > 1:
