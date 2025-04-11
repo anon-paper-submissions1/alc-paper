@@ -1,0 +1,36 @@
+Anonymity Loss Coefficient Summary
+    adult.0
+Anonymity Level: VERY STRONG
+    Consider reducing the strength of the anonymization so as to improve data quality.
+
+5 columns used as secret columns:
+  age__discretized
+  workclass
+  fnlwgt__discretized
+  education
+  education-num
+
+15 columns used as known columns:
+  workclass
+  fnlwgt
+  education
+  education-num
+  marital-status
+  occupation
+  relationship
+  race
+  sex
+  capital-gain
+  capital-loss
+  hours-per-week
+  native-country
+  label
+  age
+
+Analyzed known column / secret column combinations: 5
+Perfect anonymity:     5 (100.0%)
+ Strong anonymity:     0 (0.0%)
+          At risk:     0 (0.0%)
+   Poor anonymity:     0 (0.0%)
+     No anonymity:     0 (0.0%)
+
