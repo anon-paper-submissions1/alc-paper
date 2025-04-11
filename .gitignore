@@ -174,5 +174,5 @@ cython_debug/
 .pypirc
 
 # Mine
-work_files\
-slurm_out\
+**/work_files\
+**/slurm_out\
