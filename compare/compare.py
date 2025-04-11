@@ -3,27 +3,21 @@ import os
 from alc_attacks.best_row_match.brm_attack import BrmAttack
 import pandas as pd
 import numpy as np
-import random
 import matplotlib.pyplot as plt
-import statistics
 import seaborn as sns
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
-from scipy.stats import bootstrap
-import json
 
 orig_files_dir = os.path.join('..', 'original_data_parquet')
 anon_files_dir = os.path.join('..', 'anon_data_parquet')
 work_files_dir = os.path.join('work_files')
 os.makedirs(work_files_dir, exist_ok=True)
+os.makedirs('slurm_out', exist_ok=True)
 
 
 def do_work(job_num):
     print(f"Job number {job_num} started.")
     files_list = os.listdir(orig_files_dir)
+    files_list.sort()
     print(files_list)
     files_list_index = job_num % len(files_list)
     file_name = files_list[files_list_index]
