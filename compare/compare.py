@@ -124,19 +124,13 @@ def do_gather(measure_type):
     for root, _, files in os.walk(work_files_dir):
         for file in files:
             if file == "summary_secret_known.csv":
-                # Construct the full file path
                 file_path = os.path.join(root, file)
-                
-                # Read the file into a dataframe
                 df = pd.read_csv(file_path)
                 dir_name = os.path.dirname(file_path)
                 dir_name = os.path.basename(dir_name)
-                # strip the suffix .<job_num> from dir_name
                 dir_name = dir_name.split('.')[0]
                 print(f"Adding dir_name {dir_name} to dataframe")
-                #df['dir_name'] = dir_name
-                
-                # Append the dataframe to the list
+                df['dataset'] = dir_name
                 dataframes.append(df)
     
     print(f"Found {len(dataframes)} files named 'summary_secret_known.csv'.")
