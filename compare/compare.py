@@ -129,6 +129,10 @@ def do_gather(measure_type):
                 
                 # Read the file into a dataframe
                 df = pd.read_csv(file_path)
+                dir_name = os.path.dirname(file_path)
+                dir_name = os.path.basename(dir_name)
+                print(f"Adding dir_name {dir_name} to dataframe")
+                #df['dir_name'] = dir_name
                 
                 # Append the dataframe to the list
                 dataframes.append(df)
