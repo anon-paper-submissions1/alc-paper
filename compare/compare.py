@@ -131,6 +131,8 @@ def do_gather(measure_type):
                 df = pd.read_csv(file_path)
                 dir_name = os.path.dirname(file_path)
                 dir_name = os.path.basename(dir_name)
+                # strip the suffix .<job_num> from dir_name
+                dir_name = dir_name.split('.')[0]
                 print(f"Adding dir_name {dir_name} to dataframe")
                 #df['dir_name'] = dir_name
                 
