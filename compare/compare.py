@@ -129,7 +129,6 @@ def do_gather(measure_type):
                 dir_name = os.path.dirname(file_path)
                 dir_name = os.path.basename(dir_name)
                 dir_name = dir_name.split('.')[0]
-                print(f"Adding dir_name {dir_name} to dataframe")
                 df['dataset'] = dir_name
                 dataframes.append(df)
     
