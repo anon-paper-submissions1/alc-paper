@@ -111,6 +111,7 @@ def do_plots():
     plt.close()
 
 def do_gather(measure_type):
+    print(f"Gathering files for {measure_type}...")
     work_files_dir = os.path.join('work_files')
     out_name = 'all_secret_known.parquet'
     if measure_type == 'prior_measure':
