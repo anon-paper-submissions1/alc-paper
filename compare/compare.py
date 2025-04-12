@@ -9,14 +9,17 @@ from sklearn.model_selection import train_test_split
 
 orig_files_dir = os.path.join('..', 'original_data_parquet')
 anon_files_dir = os.path.join('..', 'anon_data_parquet')
-work_files_dir = os.path.join('work_files')
-os.makedirs(work_files_dir, exist_ok=True)
 plots_dir = os.path.join('plots')
 os.makedirs(plots_dir, exist_ok=True)
 os.makedirs('slurm_out', exist_ok=True)
+os.makedirs('slurm_prior_out', exist_ok=True)
 
 
-def do_work(job_num):
+def do_work(job_num, measure_type):
+    work_files_dir = os.path.join('work_files')
+    if measure_type == 'prior_measure':
+        work_files_dir = os.path.join('work_files_prior')
+    os.makedirs(work_files_dir, exist_ok=True)
     print(f"Job number {job_num} started.")
     files_list = os.listdir(orig_files_dir)
     files_list.sort()
@@ -37,6 +40,8 @@ def do_work(job_num):
     # strip suffix .parquet from file_name
     file_name = file_name.split('.')[0]
     attack_dir_name = f"{file_name}.{job_num}"
+    if measure_type == 'prior_measure':
+        df_orig = df_anon.copy()
     my_work_files_dir = os.path.join(work_files_dir, attack_dir_name)
     os.makedirs(my_work_files_dir, exist_ok=True)
     brm = BrmAttack(df_original=df_orig,
@@ -91,11 +96,13 @@ def do_plots():
     plt.ylim(-0.05, 1.05)
     plt.xlim(-0.55, 1.05)
     # draw a diagonal line from (0,0) to (1,1)
-    #plt.plot([0, 1], [0, 1], color='blue', linestyle='--')
+    plt.plot([0, 1], [0, 1], color='black', linestyle='dotted', linewidth=0.5)
     # draw a horizontal line at y=0.5
-    plt.axhline(y=0.5, color='red', linestyle='--')
+    plt.axhline(y=0.5, color='green', linestyle='--', linewidth=0.8)
+    plt.axhline(y=0.75, color='red', linestyle='--', linewidth=0.8)
     # draw a vertical line at x=0.5
-    plt.axvline(x=0.5, color='red', linestyle='--')
+    plt.axvline(x=0.5, color='green', linestyle='--', linewidth=0.8)
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=0.8)
     plt.grid(True)
     # tighten
     plt.tight_layout()
@@ -103,7 +110,12 @@ def do_plots():
     plt.savefig(os.path.join(plots_dir, 'alc_best_vs_one.pdf'))
     plt.close()
 
-def do_gather():
+def do_gather(measure_type):
+    work_files_dir = os.path.join('work_files')
+    out_name = 'all_secret_known.parquet'
+    if measure_type == 'prior_measure':
+        work_files_dir = os.path.join('work_files_prior')
+        out_name = 'all_secret_known_prior.parquet'
     # List to store dataframes
     dataframes = []
     
@@ -126,8 +138,8 @@ def do_gather():
         combined_df = pd.concat(dataframes, ignore_index=True)
         
         # Write the combined dataframe to a parquet file
-        combined_df.to_parquet("all_secret_known.parquet", index=False)
-        print("Parquet file written: all_secret_known.parquet")
+        combined_df.to_parquet(out_name, index=False)
+        print(f"Parquet file written: {out_name}")
     else:
         print("No files named 'summary_secret_known.csv' were found.")
 
@@ -137,11 +149,17 @@ def main():
             if len(sys.argv) != 3:
                 print("Usage: dependence.py measure <job_num>")
                 quit()
-            do_work(int(sys.argv[2]))
+            do_work(int(sys.argv[2]), 'measure')
+        elif sys.argv[1] == 'prior_measure':
+            if len(sys.argv) != 3:
+                print("Usage: dependence.py measure <job_num>")
+                quit()
+            do_work(int(sys.argv[2]), 'prior_measure')
         elif sys.argv[1] == 'plot':
             do_plots()
         elif sys.argv[1] == 'gather':
-            do_gather()
+            do_gather('measure')
+            do_gather('prior_measure')
     else:
         print("No command line parameters were provided.")
 
