@@ -52,7 +52,6 @@ def do_work(job_num, measure_type):
                         )
     brm.run_auto_attack()
 
-
 def do_plots():
     # read in all_secret_known.parquet file as pandas dataframe
     df = pd.read_parquet("all_secret_known.parquet")
@@ -68,7 +67,7 @@ def do_plots():
     # of 'alc' between df_best and df_one
     # Merge df_best and df_one on 'secret_column' and 'known_columns'
     df_merged = pd.merge(
-        df_best[['secret_column', 'known_columns', 'alc_floor']],
+        df_best[['secret_column', 'known_columns', 'alc_floor', 'attack_recall']],
         df_one[['secret_column', 'known_columns', 'alc_floor']],
         on=['secret_column', 'known_columns'],
         suffixes=('_best', '_one')
@@ -89,21 +88,46 @@ def do_plots():
     print(df_top['alc_difference'].describe())
 
     # make a seaborn scatterplot from df_top with alc_floor_best on x and alc_floor_one on y
-    plt.figure(figsize=(6, 3))
-    sns.scatterplot(data=df_top, y='alc_floor_best', x='alc_floor_one')
+    plt.figure(figsize=(6, 4))
+    scatter = sns.scatterplot(
+        data=df_top,
+        y='alc_floor_best',
+        x='alc_floor_one',
+        hue='attack_recall',  # Color points by 'attack_recall'
+        palette='viridis',   # Use a colormap
+        edgecolor=None,
+        legend=False  # Remove the legend
+    )
+
     plt.ylabel('Worst-case ALC with recall')
     plt.xlabel('ALC without recall')
-    plt.ylim(-0.05, 1.05)
+    plt.ylim(0.4, 1.05)
     plt.xlim(-0.55, 1.05)
+
+    # Add the red shaded box (y: 0.75 to 1.0, x: -0.5 to 0)
+    plt.fill_betweenx(
+        y=[0.75, 1.0], x1=-0.5, x2=0, color='red', alpha=0.1, edgecolor=None
+    )
+
+    # Add the orange shaded box (y: 0.75 to 1.0, x: 0 to 0.5)
+    plt.fill_betweenx(
+        y=[0.75, 1.0], x1=0, x2=0.5, color='orange', alpha=0.1, edgecolor=None
+    )
+
     # draw a diagonal line from (0,0) to (1,1)
     plt.plot([0, 1], [0, 1], color='black', linestyle='dotted', linewidth=0.5)
     # draw a horizontal line at y=0.5
-    plt.axhline(y=0.5, color='green', linestyle='--', linewidth=0.8)
-    plt.axhline(y=0.75, color='red', linestyle='--', linewidth=0.8)
+    plt.axhline(y=0.5, color='green', linestyle='--', linewidth=1.0)
+    plt.axhline(y=0.75, color='red', linestyle='--', linewidth=1.0)
     # draw a vertical line at x=0.5
-    plt.axvline(x=0.5, color='green', linestyle='--', linewidth=0.8)
-    plt.axvline(x=0, color='black', linestyle='--', linewidth=0.8)
+    plt.axvline(x=0.5, color='green', linestyle='--', linewidth=1.0)
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1.0)
     plt.grid(True)
+    # Add a colorbar directly from the scatterplot
+    norm = plt.Normalize(df_top['attack_recall'].min(), df_top['attack_recall'].max())
+    sm = scatter.collections[0]  # Use the scatterplot's PathCollection
+    cbar = plt.colorbar(sm, label='Attack Recall', orientation='vertical', pad=0.02)
+
     # tighten
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'alc_best_vs_one.png'))
@@ -143,6 +167,9 @@ def do_gather(measure_type):
     else:
         print("No files named 'summary_secret_known.csv' were found.")
 
+def do_config():
+    pass
+
 def main():
     if len(sys.argv) > 1:
         if sys.argv[1] == 'measure':
@@ -160,6 +187,8 @@ def main():
         elif sys.argv[1] == 'gather':
             do_gather('measure')
             do_gather('prior_measure')
+        elif sys.argv[1] == 'config':
+            do_config()
     else:
         print("No command line parameters were provided.")
 
