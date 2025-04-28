@@ -16,7 +16,6 @@ anon_files_dir = os.path.join('..', 'anon_data_parquet')
 plots_dir = os.path.join('plots')
 os.makedirs(plots_dir, exist_ok=True)
 os.makedirs('slurm_out', exist_ok=True)
-os.makedirs('slurm_prior_out', exist_ok=True)
 
 
 def do_attack(job_num):
