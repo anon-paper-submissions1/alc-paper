@@ -213,8 +213,7 @@ def do_config():
     # save jobs to a json file
     with open('jobs.json', 'w') as f:
         json.dump(jobs, f, indent=4)
-    slurm_script = f'''
-#!/bin/bash
+    slurm_script = f'''#!/bin/bash
 #SBATCH --job-name=compare
 #SBATCH --output=slurm_out/out.%a.out
 #SBATCH --time=7-0
