@@ -1,11 +1,15 @@
 import sys
 import os
-from alc_attacks.best_row_match.brm_attack import BrmAttack
+import json
 import pandas as pd
-import numpy as np
+import random
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split
+import pprint
+from anonymity_loss_coefficient import BrmAttack
+from anonymity_loss_coefficient.utils import get_good_known_column_sets
+
+pp = pprint.PrettyPrinter(indent=4)
 
 orig_files_dir = os.path.join('..', 'original_data_parquet')
 anon_files_dir = os.path.join('..', 'anon_data_parquet')
@@ -15,42 +19,60 @@ os.makedirs('slurm_out', exist_ok=True)
 os.makedirs('slurm_prior_out', exist_ok=True)
 
 
-def do_work(job_num, measure_type):
-    work_files_dir = os.path.join('work_files')
-    if measure_type == 'prior_measure':
-        work_files_dir = os.path.join('work_files_prior')
-    os.makedirs(work_files_dir, exist_ok=True)
+def do_attack(job_num):
+    # read in jobs.json
+    with open('jobs.json', 'r') as f:
+        jobs = json.load(f)
+    # get the job from the jobs list
+    if job_num >= len(jobs):
+        print(f"Job number {job_num} is out of range. There are only {len(jobs)} jobs.")
+        sys.exit()
+    job = jobs[job_num]
     print(f"Job number {job_num} started.")
-    files_list = os.listdir(orig_files_dir)
-    files_list.sort()
-    print(files_list)
-    files_list_index = job_num % len(files_list)
-    file_name = files_list[files_list_index]
-    print(f"Processing file {file_name} with index {files_list_index}")
-    my_file = os.path.join(orig_files_dir, file_name)
-    # read in my_file parquet file as pandas dataframe 
-    df_orig = pd.read_parquet(my_file)
+    pp.pprint(job)
+    if job['approach'] == 'ours':
+        work_files_dir = os.path.join('work_files')
+        df_orig = pd.read_parquet(os.path.join(orig_files_dir, job['dataset']))
+    else:
+        work_files_dir = os.path.join('work_files_prior')
+        # When emulating the prior approach, we use the anonymized data
+        # as the original data for the baseline modeling
+        df_orig = pd.read_parquet(os.path.join(anon_files_dir, job['dataset']))
+    os.makedirs(work_files_dir, exist_ok=True)
     # read in the corresponding anonymized file 
-    my_file_anon = os.path.join(anon_files_dir, file_name)
-    df_anon = pd.read_parquet(my_file_anon)
-    df_cntl = df_orig.sample(n=1000)
-    df_orig = df_orig.drop(df_cntl.index)
-    print(f"Created df_cntl with {len(df_cntl)} rows")
-    print(f"Original df has {len(df_orig)} rows")
+    df_anon = pd.read_parquet(os.path.join(anon_files_dir, job['dataset']))
     # strip suffix .parquet from file_name
-    file_name = file_name.split('.')[0]
+    file_name = job['dataset'].split('.')[0]
     attack_dir_name = f"{file_name}.{job_num}"
-    if measure_type == 'prior_measure':
-        df_orig = df_anon.copy()
     my_work_files_dir = os.path.join(work_files_dir, attack_dir_name)
     os.makedirs(my_work_files_dir, exist_ok=True)
+
     brm = BrmAttack(df_original=df_orig,
-                        df_control=df_cntl,
-                        df_synthetic=df_anon,
-                        results_path=my_work_files_dir,
-                        attack_name = attack_dir_name,
-                        )
-    brm.run_auto_attack()
+                    df_synthetic=df_anon,
+                    results_path=my_work_files_dir,
+                    attack_name = attack_dir_name,
+                    no_counter=True,
+                    )
+    if False:
+        # for debugging
+        brm.run_one_attack(
+            secret_column='V26',
+            known_columns=['V12', 'V7', 'V10', 'V16', 'Amount', 'V2'],
+        )
+        quit()
+    # get all columns in df_orig.columns but not in job['known_columns']
+    secret_columns = [c for c in df_orig.columns if c not in job['known_columns']]
+    # shuffle the secret columns
+    random.shuffle(secret_columns)
+    print(f"Secret columns: {secret_columns}")
+    print(f"Known columns: {job['known_columns']}")
+    # Select 5 random secret columns for the attacks
+    for secret_column in secret_columns[:5]:
+        print(f"Running attack for {secret_column}...")
+        brm.run_one_attack(
+            secret_column=secret_column,
+            known_columns=job['known_columns'],
+        )
 
 def do_plots():
     # read in all_secret_known.parquet file as pandas dataframe
@@ -168,20 +190,52 @@ def do_gather(measure_type):
         print("No files named 'summary_secret_known.csv' were found.")
 
 def do_config():
-    pass
+    jobs = []
+    files_list = os.listdir(orig_files_dir)
+    for file_name in files_list:
+        # read in the file
+        df_orig = pd.read_parquet(os.path.join(orig_files_dir, file_name))
+        print(f"Get known column sets for {file_name}")
+        # First populate with the cases where all columns are known
+        for column in df_orig.columns:
+            # make a list with all columns except column
+            other_columns = [c for c in df_orig.columns if c != column]
+            jobs.append({"approach": "ours", "dataset": file_name, "known_columns": other_columns})
+            jobs.append({"approach": "prior", "dataset": file_name, "known_columns": other_columns})
+            pass
+        known_column_sets = get_good_known_column_sets(df_orig, list(df_orig.columns), max_sets=200)
+        for column_set in known_column_sets:
+            # make a list with all columns except column_set
+            jobs.append({"approach": "ours", "dataset": file_name, "known_columns": list(column_set)})
+            jobs.append({"approach": "prior", "dataset": file_name, "known_columns": list(column_set)})
+    random.shuffle(jobs)
+    for i, job in enumerate(jobs):
+        job['job_num'] = i
+    # save jobs to a json file
+    with open('jobs.json', 'w') as f:
+        json.dump(jobs, f, indent=4)
+    slurm_script = f'''
+#!/bin/bash
+#SBATCH --job-name=compare
+#SBATCH --output=slurm_out/out.%a.out
+#SBATCH --time=7-0
+#SBATCH --mem=30G
+#SBATCH --cpus-per-task=1
+#SBATCH --array=0-{len(jobs)-1}
+arrayNum="${{SLURM_ARRAY_TASK_ID}}"
+source ../.venv/bin/activate
+python compare.py attack $arrayNum
+'''
+    with open('slurm_script', 'w') as f:
+        f.write(slurm_script)
 
 def main():
     if len(sys.argv) > 1:
-        if sys.argv[1] == 'measure':
+        if sys.argv[1] == 'attack':
             if len(sys.argv) != 3:
-                print("Usage: dependence.py measure <job_num>")
+                print("Usage: compare.py attack <job_num>")
                 quit()
-            do_work(int(sys.argv[2]), 'measure')
-        elif sys.argv[1] == 'prior_measure':
-            if len(sys.argv) != 3:
-                print("Usage: dependence.py measure <job_num>")
-                quit()
-            do_work(int(sys.argv[2]), 'prior_measure')
+            do_attack(int(sys.argv[2]))
         elif sys.argv[1] == 'plot':
             do_plots()
         elif sys.argv[1] == 'gather':
