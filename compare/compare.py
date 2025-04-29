@@ -172,7 +172,11 @@ def do_gather(measure_type):
             if file == "summary_secret_known.csv":
                 file_path = os.path.join(root, file)
                 print(f"Reading file: {file_path}")
-                df = pd.read_csv(file_path)
+                try:
+                    df = pd.read_csv(file_path)
+                except Exception as e:
+                    print(f"Error reading file {file_path}: {e}")
+                    continue
                 dir_name = os.path.dirname(file_path)
                 dir_name = os.path.basename(dir_name)
                 dir_name = dir_name.split('.')[0]
