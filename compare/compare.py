@@ -29,14 +29,13 @@ def do_attack(job_num):
     job = jobs[job_num]
     print(f"Job number {job_num} started.")
     pp.pprint(job)
+    df_orig = pd.read_parquet(os.path.join(orig_files_dir, job['dataset']))
     if job['approach'] == 'ours':
         work_files_dir = os.path.join('work_files')
-        df_orig = pd.read_parquet(os.path.join(orig_files_dir, job['dataset']))
+        use_anon_for_baseline = False
     else:
         work_files_dir = os.path.join('work_files_prior')
-        # When emulating the prior approach, we use the anonymized data
-        # as the original data for the baseline modeling
-        df_orig = pd.read_parquet(os.path.join(anon_files_dir, job['dataset']))
+        use_anon_for_baseline = True
     os.makedirs(work_files_dir, exist_ok=True)
     # read in the corresponding anonymized file 
     df_anon = pd.read_parquet(os.path.join(anon_files_dir, job['dataset']))
@@ -50,6 +49,7 @@ def do_attack(job_num):
                     df_synthetic=df_anon,
                     results_path=my_work_files_dir,
                     attack_name = attack_dir_name,
+                    use_anon_for_baseline=use_anon_for_baseline,
                     no_counter=True,
                     )
     if False:
@@ -75,6 +75,73 @@ def do_attack(job_num):
         )
 
 def do_plots():
+    plot_prior_versus_ours()
+    quit()
+    plot_alc_best_vs_one()
+
+def plot_prior_versus_ours():
+    # Read the parquet files into dataframes
+    try:
+        df_ours = pd.read_parquet("all_secret_known.parquet")
+        df_prior = pd.read_parquet("all_secret_known_prior.parquet")
+    except Exception as e:
+        print(f"Error reading parquet files: {e}")
+        return
+
+    # Process df_ours
+    df_ours['alc_floor'] = df_ours['alc'].clip(lower=-0.5)
+    idx_ours = df_ours.groupby(['secret_column', 'known_columns'])['alc'].idxmax()
+    df_ours_best = df_ours.loc[idx_ours].reset_index(drop=True)
+    print(df_ours_best.columns)
+
+    # Process df_prior
+    df_prior['alc_floor'] = df_prior['alc'].clip(lower=-0.5)
+    idx_prior = df_prior.groupby(['secret_column', 'known_columns'])['alc'].idxmax()
+    df_prior_best = df_prior.loc[idx_prior].reset_index(drop=True)
+    print(df_ours_best['alc_floor'].describe())
+    print(df_prior_best['alc_floor'].describe())
+    print("----------")
+    print(df_ours_best['base_prc'].describe())
+    print(df_prior_best['base_prc'].describe())
+
+    print(f"Number of groups in 'own': {len(df_ours_best)}")
+    print(f"Number of groups in 'prior': {len(df_prior_best)}")
+
+    # Create a dataframe for common groups
+    df_common = pd.merge(
+        df_ours_best[['secret_column', 'known_columns', 'alc_floor']],
+        df_prior_best[['secret_column', 'known_columns', 'alc_floor']],
+        on=['secret_column', 'known_columns'],
+        suffixes=('_ours', '_prior')
+    )
+
+    print(f"Number of common groups: {len(df_common)}")
+
+    # Create a scatterplot
+    plt.figure(figsize=(6, 6))
+    sns.scatterplot(
+        data=df_common,
+        x='alc_floor_prior',
+        y='alc_floor_ours',
+        alpha=0.7,
+        edgecolor=None
+    )
+
+    # Add labels and formatting
+    plt.xlabel('ALC (Prior)')
+    plt.ylabel('ALC (Own)')
+    plt.title('Comparison of ALC: Prior vs Own')
+    plt.axline((0, 0), slope=1, color='red', linestyle='--', linewidth=1)  # Diagonal line
+    plt.grid(True)
+
+    # Save the scatterplot
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'prior_versus_ours.png'))
+    plt.savefig(os.path.join(plots_dir, 'prior_versus_ours.pdf'))
+    plt.close()
+
+
+def plot_alc_best_vs_one():
     # read in all_secret_known.parquet file as pandas dataframe
     df = pd.read_parquet("all_secret_known.parquet")
     # make a new column called alc_floor where all alc values less than 0 are set to 0
