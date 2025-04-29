@@ -55,13 +55,14 @@ def do_attack(job_num):
     if False:
         # for debugging
         brm.run_one_attack(
-            secret_column='V26',
-            known_columns=['V12', 'V7', 'V10', 'V16', 'Amount', 'V2'],
+            secret_column='n_unique_tokens',
+            known_columns=['n_tokens_title', 'n_tokens_content',],
         )
         quit()
     # get all columns in df_orig.columns but not in job['known_columns']
     secret_columns = [c for c in df_orig.columns if c not in job['known_columns']]
-    # shuffle the secret columns
+    # shuffle the secret columns, but seeded to insure that prior and ours use the same columns
+    random.seed(42)
     random.shuffle(secret_columns)
     print(f"Secret columns: {secret_columns}")
     print(f"Known columns: {job['known_columns']}")
@@ -170,6 +171,7 @@ def do_gather(measure_type):
         for file in files:
             if file == "summary_secret_known.csv":
                 file_path = os.path.join(root, file)
+                print(f"Reading file: {file_path}")
                 df = pd.read_csv(file_path)
                 dir_name = os.path.dirname(file_path)
                 dir_name = os.path.basename(dir_name)
