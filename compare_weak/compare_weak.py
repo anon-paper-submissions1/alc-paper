@@ -295,7 +295,7 @@ def do_config():
 #SBATCH --array=0-{len(jobs)-1}
 arrayNum="${{SLURM_ARRAY_TASK_ID}}"
 source ../.venv/bin/activate
-python compare.py attack $arrayNum
+python compare_weak.py attack $arrayNum
 '''
     with open('slurm_script', 'w') as f:
         f.write(slurm_script)
