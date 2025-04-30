@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #SBATCH --job-name=compare_weak
 #SBATCH --output=slurm_out/out.%a.out
