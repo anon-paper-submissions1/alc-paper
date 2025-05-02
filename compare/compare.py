@@ -1,3 +1,4 @@
+import argparse
 import sys
 import os
 import json
@@ -13,12 +14,13 @@ pp = pprint.PrettyPrinter(indent=4)
 
 orig_files_dir = os.path.join('..', 'original_data_parquet')
 anon_files_dir = os.path.join('..', 'anon_data_parquet')
+weak_files_dir = os.path.join('..', 'weak_data_parquet')
 plots_dir = os.path.join('plots')
 os.makedirs(plots_dir, exist_ok=True)
 os.makedirs('slurm_out', exist_ok=True)
 
 
-def do_attack(job_num):
+def do_attack(job_num, strength):
     # read in jobs.json
     with open('jobs.json', 'r') as f:
         jobs = json.load(f)
@@ -29,12 +31,15 @@ def do_attack(job_num):
     job = jobs[job_num]
     print(f"Job number {job_num} started.")
     pp.pprint(job)
-    df_orig = pd.read_parquet(os.path.join(orig_files_dir, job['dataset']))
+    if strength == 'weak':
+        df_orig = pd.read_parquet(os.path.join(weak_files_dir, job['dataset']))
+    else:
+        df_orig = pd.read_parquet(os.path.join(orig_files_dir, job['dataset']))
     if job['approach'] == 'ours':
-        work_files_dir = os.path.join('work_files')
+        work_files_dir = os.path.join(f'work_files_{strength}')
         use_anon_for_baseline = False
     else:
-        work_files_dir = os.path.join('work_files_prior')
+        work_files_dir = os.path.join(f'work_files_prior_{strength}')
         use_anon_for_baseline = True
     os.makedirs(work_files_dir, exist_ok=True)
     # read in the corresponding anonymized file 
@@ -75,11 +80,6 @@ def do_attack(job_num):
         )
 
 def do_plots():
-    plot_prior_versus_ours()
-    quit()
-    plot_alc_best_vs_one()
-
-def plot_prior_versus_ours():
     # Read the parquet files into dataframes
     try:
         df_ours = pd.read_parquet("all_secret_known.parquet")
@@ -88,6 +88,10 @@ def plot_prior_versus_ours():
         print(f"Error reading parquet files: {e}")
         return
 
+    plot_prior_versus_ours(df_ours, df_prior)
+    plot_alc_best_vs_one(df_ours)
+
+def plot_prior_versus_ours(df_ours, df_prior):
     # Process df_ours
     df_ours['alc_floor'] = df_ours['alc'].clip(lower=-0.5)
     idx_ours = df_ours.groupby(['secret_column', 'known_columns'])['alc'].idxmax()
@@ -141,16 +145,19 @@ def plot_prior_versus_ours():
     plt.close()
 
 
-def plot_alc_best_vs_one():
-    # read in all_secret_known.parquet file as pandas dataframe
-    df = pd.read_parquet("all_secret_known.parquet")
+def plot_alc_best_vs_one(df):
     # make a new column called alc_floor where all alc values less than 0 are set to 0
     df['alc_floor'] = df['alc'].clip(lower=-0.5)
-    idx = df.groupby(['secret_column', 'known_columns'])['alc'].idxmax()
-    df_best = df.loc[idx].reset_index(drop=True)
+    df_best = df[df['paired'] == False].reset_index(drop=True)
+    print(f"Number of rows in 'best': {len(df_best)}")
+    idx = df_best.groupby(['secret_column', 'known_columns'])['alc'].idxmax()
+    df_best = df_best.loc[idx].reset_index(drop=True)
+    print(f"Number of rows in 'best' after grouping: {len(df_best)}")
     df_one = df[df['attack_recall'] == 1].reset_index(drop=True)
+    print(f"Number of rows in 'one': {len(df_one)}")
     idx = df_one.groupby(['secret_column', 'known_columns'])['alc'].idxmax()
     df_one = df_one.loc[idx].reset_index(drop=True)
+    print(f"df_one after grouping: {len(df_one)}")
     # for each combination of secret_column and known_columns, that is in both
     # df_best and df_one, make a new dataframe df_diff that contains the difference
     # of 'alc' between df_best and df_one
@@ -161,6 +168,7 @@ def plot_alc_best_vs_one():
         on=['secret_column', 'known_columns'],
         suffixes=('_best', '_one')
     )
+    print(f"Number of rows in merged dataframe: {len(df_merged)}")
     # Compute the difference of alc values
     df_merged['alc_difference'] = df_merged['alc_floor_best'] - df_merged['alc_floor_one']
     print("df_best alc:")
@@ -179,7 +187,8 @@ def plot_alc_best_vs_one():
     # make a seaborn scatterplot from df_top with alc_floor_best on x and alc_floor_one on y
     plt.figure(figsize=(6, 4))
     scatter = sns.scatterplot(
-        data=df_top,
+        data=df_merged,
+        #data=df_top,
         y='alc_floor_best',
         x='alc_floor_one',
         hue='attack_recall',  # Color points by 'attack_recall'
@@ -190,8 +199,8 @@ def plot_alc_best_vs_one():
 
     plt.ylabel('Worst-case ALC with recall')
     plt.xlabel('ALC without recall')
-    plt.ylim(0.4, 1.05)
-    plt.xlim(-0.55, 1.05)
+    #plt.ylim(0.4, 1.05)
+    #plt.xlim(-0.55, 1.05)
 
     # Add the red shaded box (y: 0.75 to 1.0, x: -0.5 to 0)
     plt.fill_betweenx(
@@ -223,13 +232,13 @@ def plot_alc_best_vs_one():
     plt.savefig(os.path.join(plots_dir, 'alc_best_vs_one.pdf'))
     plt.close()
 
-def do_gather(measure_type):
-    print(f"Gathering files for {measure_type}...")
-    work_files_dir = os.path.join('work_files')
-    out_name = 'all_secret_known.parquet'
+def do_gather(measure_type, strength):
+    print(f"Gathering files for {measure_type}, strength {strength}...")
+    work_files_dir = os.path.join(f'work_files_{strength}')
+    out_name = f'all_secret_known_{strength}.parquet'
     if measure_type == 'prior_measure':
-        work_files_dir = os.path.join('work_files_prior')
-        out_name = 'all_secret_known_prior.parquet'
+        work_files_dir = os.path.join(f'work_files_prior_{strength}')
+        out_name = f'all_secret_known_prior_{strength}.parquet'
     # List to store dataframes
     dataframes = []
     
@@ -297,25 +306,47 @@ arrayNum="${{SLURM_ARRAY_TASK_ID}}"
 source ../.venv/bin/activate
 python compare.py attack $arrayNum
 '''
-    with open('slurm_script', 'w') as f:
+    with open('slurm_script_strong', 'w') as f:
+        f.write(slurm_script)
+    slurm_script = f'''#!/bin/bash
+#SBATCH --job-name=compare
+#SBATCH --output=slurm_out/out.%a.out
+#SBATCH --time=7-0
+#SBATCH --mem=30G
+#SBATCH --cpus-per-task=1
+#SBATCH --array=0-{len(jobs)-1}
+arrayNum="${{SLURM_ARRAY_TASK_ID}}"
+source ../.venv/bin/activate
+python compare.py --weak attack $arrayNum
+'''
+    with open('slurm_script_weak', 'w') as f:
         f.write(slurm_script)
 
 def main():
-    if len(sys.argv) > 1:
-        if sys.argv[1] == 'attack':
-            if len(sys.argv) != 3:
-                print("Usage: compare.py attack <job_num>")
-                quit()
-            do_attack(int(sys.argv[2]))
-        elif sys.argv[1] == 'plot':
-            do_plots()
-        elif sys.argv[1] == 'gather':
-            do_gather('measure')
-            do_gather('prior_measure')
-        elif sys.argv[1] == 'config':
-            do_config()
-    else:
-        print("No command line parameters were provided.")
+    parser = argparse.ArgumentParser(description="Run attacks, plots, or configuration.")
+    parser.add_argument("command", choices=["attack", "plot", "gather", "config"], help="Command to execute")
+    parser.add_argument("job_num", nargs="?", type=int, help="Job number (required for 'attack')")
+    parser.add_argument("-w", "--weak", action="store_true", help="Use weak strength (default is strong)")
+
+    args = parser.parse_args()
+
+    # Determine the strength based on the -w/--weak flag
+    strength = "weak" if args.weak else "strong"
+
+    if args.command == "attack":
+        if args.job_num is None:
+            print("Error: 'attack' command requires a job number.")
+            sys.exit(1)
+        do_attack(args.job_num, strength)
+    elif args.command == "plot":
+        do_plots()
+    elif args.command == "gather":
+        do_gather('measure', 'strong')
+        do_gather('prior_measure', 'strong')
+        do_gather('measure', 'weak')
+        do_gather('prior_measure', 'weak')
+    elif args.command == "config":
+        do_config()
 
 if __name__ == "__main__":
     main()

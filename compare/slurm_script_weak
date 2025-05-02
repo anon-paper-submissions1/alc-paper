@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=compare_weak
+#SBATCH --job-name=compare
 #SBATCH --output=slurm_out/out.%a.out
 #SBATCH --time=7-0
 #SBATCH --mem=30G
@@ -7,4 +7,4 @@
 #SBATCH --array=0-4149
 arrayNum="${SLURM_ARRAY_TASK_ID}"
 source ../.venv/bin/activate
-python compare_weak.py attack $arrayNum
+python compare.py --weak attack $arrayNum
