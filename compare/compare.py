@@ -29,12 +29,15 @@ def do_attack(job_num, strength):
         print(f"Job number {job_num} is out of range. There are only {len(jobs)} jobs.")
         sys.exit()
     job = jobs[job_num]
-    print(f"Job number {job_num} started.")
+    print(f"Job number {job_num} started for strength {strength}.")
     pp.pprint(job)
+    df_orig = pd.read_parquet(os.path.join(orig_files_dir, job['dataset']))
     if strength == 'weak':
-        df_orig = pd.read_parquet(os.path.join(weak_files_dir, job['dataset']))
+        print(f"Reading {weak_files_dir} for anonymous data")
+        df_anon = pd.read_parquet(os.path.join(weak_files_dir, job['dataset']))
     else:
-        df_orig = pd.read_parquet(os.path.join(orig_files_dir, job['dataset']))
+        print(f"Reading {anon_files_dir} for anonymized data")
+        df_anon = pd.read_parquet(os.path.join(anon_files_dir, job['dataset']))
     if job['approach'] == 'ours':
         work_files_dir = os.path.join(f'work_files_{strength}')
         use_anon_for_baseline = False
@@ -43,7 +46,6 @@ def do_attack(job_num, strength):
         use_anon_for_baseline = True
     os.makedirs(work_files_dir, exist_ok=True)
     # read in the corresponding anonymized file 
-    df_anon = pd.read_parquet(os.path.join(anon_files_dir, job['dataset']))
     # strip suffix .parquet from file_name
     file_name = job['dataset'].split('.')[0]
     attack_dir_name = f"{file_name}.{job_num}"
@@ -79,20 +81,21 @@ def do_attack(job_num, strength):
             known_columns=job['known_columns'],
         )
 
-def do_plots():
+def do_plots(strength):
     # Read the parquet files into dataframes
     try:
-        df_ours = pd.read_parquet("all_secret_known.parquet")
-        df_prior = pd.read_parquet("all_secret_known_prior.parquet")
+        df_ours = pd.read_parquet(f"all_secret_known_{strength}.parquet")
+        df_prior = pd.read_parquet(f"all_secret_known_prior_{strength}.parquet")
     except Exception as e:
         print(f"Error reading parquet files: {e}")
         return
 
-    plot_prior_versus_ours(df_ours, df_prior)
-    plot_alc_best_vs_one(df_ours)
+    plot_prior_versus_ours(df_ours, df_prior, strength)
+    plot_alc_best_vs_one(df_ours, strength)
 
-def plot_prior_versus_ours(df_ours, df_prior):
+def plot_prior_versus_ours(df_ours, df_prior, strength):
     # Process df_ours
+    print(f"plot_prior_versus_ours: {strength}")
     df_ours['alc_floor'] = df_ours['alc'].clip(lower=-0.5)
     idx_ours = df_ours.groupby(['secret_column', 'known_columns'])['alc'].idxmax()
     df_ours_best = df_ours.loc[idx_ours].reset_index(drop=True)
@@ -134,18 +137,19 @@ def plot_prior_versus_ours(df_ours, df_prior):
     # Add labels and formatting
     plt.xlabel('ALC (Prior)')
     plt.ylabel('ALC (Own)')
-    plt.title('Comparison of ALC: Prior vs Own')
+    plt.title(f'Comparison of ALC: Prior vs Own ({strength})')
     plt.axline((0, 0), slope=1, color='red', linestyle='--', linewidth=1)  # Diagonal line
     plt.grid(True)
 
     # Save the scatterplot
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'prior_versus_ours.png'))
-    plt.savefig(os.path.join(plots_dir, 'prior_versus_ours.pdf'))
+    plt.savefig(os.path.join(plots_dir, f'prior_versus_ours_{strength}.png'))
+    plt.savefig(os.path.join(plots_dir, f'prior_versus_ours_{strength}.pdf'))
     plt.close()
 
 
-def plot_alc_best_vs_one(df):
+def plot_alc_best_vs_one(df, strength):
+    print(f"plot_alc_best_vs_one: {strength}")
     # make a new column called alc_floor where all alc values less than 0 are set to 0
     df['alc_floor'] = df['alc'].clip(lower=-0.5)
     df_best = df[df['paired'] == False].reset_index(drop=True)
@@ -199,6 +203,7 @@ def plot_alc_best_vs_one(df):
 
     plt.ylabel('Worst-case ALC with recall')
     plt.xlabel('ALC without recall')
+    plt.title(f'ALC Best vs Recall of one ({strength})')
     #plt.ylim(0.4, 1.05)
     #plt.xlim(-0.55, 1.05)
 
@@ -228,8 +233,8 @@ def plot_alc_best_vs_one(df):
 
     # tighten
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'alc_best_vs_one.png'))
-    plt.savefig(os.path.join(plots_dir, 'alc_best_vs_one.pdf'))
+    plt.savefig(os.path.join(plots_dir, f'alc_best_vs_one_{strength}.png'))
+    plt.savefig(os.path.join(plots_dir, f'alc_best_vs_one_{strength}.pdf'))
     plt.close()
 
 def do_gather(measure_type, strength):
@@ -309,7 +314,7 @@ python compare.py attack $arrayNum
     with open('slurm_script_strong', 'w') as f:
         f.write(slurm_script)
     slurm_script = f'''#!/bin/bash
-#SBATCH --job-name=compare
+#SBATCH --job-name=compare_weak
 #SBATCH --output=slurm_out/out.%a.out
 #SBATCH --time=7-0
 #SBATCH --mem=30G
@@ -339,7 +344,8 @@ def main():
             sys.exit(1)
         do_attack(args.job_num, strength)
     elif args.command == "plot":
-        do_plots()
+        do_plots('strong')
+        do_plots('weak')
     elif args.command == "gather":
         do_gather('measure', 'strong')
         do_gather('prior_measure', 'strong')
