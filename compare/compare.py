@@ -12,6 +12,8 @@ from anonymity_loss_coefficient.utils import get_good_known_column_sets
 
 pp = pprint.PrettyPrinter(indent=4)
 
+skip_prior = True
+
 orig_files_dir = os.path.join('..', 'original_data_parquet')
 anon_files_dir = os.path.join('..', 'anon_data_parquet')
 weak_files_dir = os.path.join('..', 'weak_data_parquet')
@@ -42,6 +44,9 @@ def do_attack(job_num, strength):
         work_files_dir = os.path.join(f'work_files_{strength}')
         use_anon_for_baseline = False
     else:
+        if skip_prior:
+            print(f"Skipping prior attack for {job['dataset']}")
+            return
         work_files_dir = os.path.join(f'work_files_prior_{strength}')
         use_anon_for_baseline = True
     os.makedirs(work_files_dir, exist_ok=True)
@@ -307,7 +312,7 @@ Safe & Unsafe & {with_safe_without_unsafe_strong}\\% & {with_safe_without_unsafe
 \\end{{table}}
 '''
     # Write tab to a file
-    with open('wrong_conclusion.tex', 'w') as f:
+    with open('plots/wrong_conclusion.tex', 'w') as f:
         f.write(tab)
 
     # Prepare data for recall boxplots
