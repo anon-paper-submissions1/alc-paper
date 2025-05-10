@@ -83,4 +83,4 @@ if __name__ == "__main__":
         output_directory = "weak_data_parquet"
         process_parquet_files(input_directory, output_directory, 0.1)
     output_directory = "strong_data_parquet"
-    process_parquet_files(input_directory, output_directory, 0.5)
+    process_parquet_files(input_directory, output_directory, 0.4)
