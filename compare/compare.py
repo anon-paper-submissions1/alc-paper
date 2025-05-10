@@ -12,10 +12,8 @@ from anonymity_loss_coefficient.utils import get_good_known_column_sets
 
 pp = pprint.PrettyPrinter(indent=4)
 
-skip_prior = True
-
 orig_files_dir = os.path.join('..', 'original_data_parquet')
-anon_files_dir = os.path.join('..', 'anon_data_parquet')
+anon_files_dir = os.path.join('..', 'strong_data_parquet')
 weak_files_dir = os.path.join('..', 'weak_data_parquet')
 plots_dir = os.path.join('plots')
 os.makedirs(plots_dir, exist_ok=True)
@@ -44,9 +42,6 @@ def do_attack(job_num, strength):
         work_files_dir = os.path.join(f'work_files_{strength}')
         use_anon_for_baseline = False
     else:
-        if skip_prior:
-            print(f"Skipping prior attack for {job['dataset']}")
-            return
         work_files_dir = os.path.join(f'work_files_prior_{strength}')
         use_anon_for_baseline = True
     os.makedirs(work_files_dir, exist_ok=True)
@@ -55,6 +50,10 @@ def do_attack(job_num, strength):
     file_name = job['dataset'].split('.')[0]
     attack_dir_name = f"{file_name}.{job_num}"
     my_work_files_dir = os.path.join(work_files_dir, attack_dir_name)
+    test_file_path = os.path.join(my_work_files_dir, 'summary_secret_known.csv')
+    if os.path.exists(test_file_path):
+        print(f"File {test_file_path} already exists. Skipping this job.")
+        return
     os.makedirs(my_work_files_dir, exist_ok=True)
 
     brm = BrmAttack(df_original=df_orig,

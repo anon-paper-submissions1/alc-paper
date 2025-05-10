@@ -3,7 +3,7 @@ import pandas as pd
 import random
 import numpy as np
 
-def swap_random_values(df, column_index, swap_fraction=0.05):
+def swap_random_values(df, column_index, swap_fraction=0.1):
     """
     Randomly swaps values in a column for a given fraction of rows.
     """
@@ -36,6 +36,11 @@ def process_parquet_files(input_dir, output_dir, swap_fraction=0.1):
 
             # Read the parquet file
             df_original = pd.read_parquet(input_path)
+
+            # If df_original has more than 30000, sample 30000 rows
+            if len(df_original) > 30000:
+                df_original = df_original.sample(n=30000, random_state=1).reset_index(drop=True)
+                df_original.to_parquet(input_path, index=False)
 
             # Make a copy of the original dataframe for comparison
             df_swapped = df_original.copy()
@@ -74,5 +79,8 @@ def process_parquet_files(input_dir, output_dir, swap_fraction=0.1):
 
 if __name__ == "__main__":
     input_directory = "original_data_parquet"
-    output_directory = "weak_data_parquet"
-    process_parquet_files(input_directory, output_directory)
+    if False:
+        output_directory = "weak_data_parquet"
+        process_parquet_files(input_directory, output_directory, 0.1)
+    output_directory = "strong_data_parquet"
+    process_parquet_files(input_directory, output_directory, 0.5)
