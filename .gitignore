@@ -179,3 +179,8 @@ cython_debug/
 **/slurm_out/
 **/plots/
 all_secret_known.parquet
+**/*.parquet
+**/*.png
+**/*.tex
+**/*.csv
+**/*.txt

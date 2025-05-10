@@ -17,7 +17,8 @@ anon_files_dir = os.path.join('..', 'strong_data_parquet')
 weak_files_dir = os.path.join('..', 'weak_data_parquet')
 plots_dir = os.path.join('plots')
 os.makedirs(plots_dir, exist_ok=True)
-os.makedirs('slurm_out', exist_ok=True)
+os.makedirs('slurm_out_weak', exist_ok=True)
+os.makedirs('slurm_out_strong', exist_ok=True)
 
 
 def do_attack(job_num, strength):
@@ -40,10 +41,12 @@ def do_attack(job_num, strength):
         df_anon = pd.read_parquet(os.path.join(anon_files_dir, job['dataset']))
     if job['approach'] == 'ours':
         work_files_dir = os.path.join(f'work_files_{strength}')
-        use_anon_for_baseline = False
+        prior_experimentation_swap_fraction = -1
     else:
         work_files_dir = os.path.join(f'work_files_prior_{strength}')
-        use_anon_for_baseline = True
+        prior_experiment_swap_fraction = 0.5
+        if strength == 'weak':
+            prior_experiment_swap_fraction = 0.1
     os.makedirs(work_files_dir, exist_ok=True)
     # read in the corresponding anonymized file 
     # strip suffix .parquet from file_name
@@ -60,7 +63,7 @@ def do_attack(job_num, strength):
                     anon=df_anon,
                     results_path=my_work_files_dir,
                     attack_name = attack_dir_name,
-                    use_anon_for_baseline=use_anon_for_baseline,
+                    prior_experiment_swap_fraction=prior_experiment_swap_fraction,
                     no_counter=True,
                     )
     if False:
