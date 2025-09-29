@@ -13,4 +13,4 @@ Directory `compare` contains the code for running the attacks using both our app
 
 Directory `prc_alc`contains the code generating the plots showing the behavior of the PRC and ALC measures.
 
-Directory `anonymity_loss_coefficient` is a copy of the code used for both the ALC measure and the attacks, version 1.0.29. This code from this location is not used directly by the experimental code. Rather, the code as used here is pip installed.
+Directory `anonymity_loss_coefficient_1.0.29` is a copy of the code used for both the ALC measure and the attacks, version 1.0.29. This code from this location is not used directly by the experimental code. Rather, the code as used here was pip installed.
