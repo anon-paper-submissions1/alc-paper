@@ -79,8 +79,7 @@ def process_parquet_files(input_dir, output_dir, swap_fraction=0.1):
 
 if __name__ == "__main__":
     input_directory = "original_data_parquet"
-    if False:
-        output_directory = "weak_data_parquet"
-        process_parquet_files(input_directory, output_directory, 0.1)
+    output_directory = "weak_data_parquet"
+    process_parquet_files(input_directory, output_directory, 0.1)
     output_directory = "strong_data_parquet"
     process_parquet_files(input_directory, output_directory, 0.4)
