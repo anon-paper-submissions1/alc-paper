@@ -1,0 +1,539 @@
+import os
+from typing import Optional, Dict, List, Union, Any, Tuple, Generator
+import numpy as np
+import pandas as pd
+import logging
+import random
+import time
+from .reporting import *
+from .data_files import DataFiles
+from .baseline_predictor import BaselinePredictor
+from .score_interval import ScoreInterval
+from .anonymity_loss_coefficient import AnonymityLossCoefficient
+from .reporting import Reporter
+from .defaults import defaults
+from anonymity_loss_coefficient.utils import setup_logging
+import pprint
+pp = pprint.PrettyPrinter(indent=4)
+
+
+class ALCManager:
+    def __init__(self, df_original: pd.DataFrame,
+                       anon: Union[pd.DataFrame, List[pd.DataFrame]],
+                       results_path: str,
+                       attack_name: str = '',
+                       logger: logging.Logger = None,
+                       flush: bool = defaults['flush'],
+                       disc_max: int = defaults['disc_max'],
+                       disc_bins: int = defaults['disc_bins'],
+                       discretize_in_place: bool = defaults['discretize_in_place'],
+                       si_type: str = defaults['si_type'],
+                       si_confidence: float = defaults['si_confidence'],
+                       max_score_interval: float = defaults['max_score_interval'],
+                       halt_thresh_low = defaults['halt_thresh_low'],
+                       halt_thresh_high = defaults['halt_thresh_high'],
+                       halt_interval_thresh = defaults['halt_interval_thresh'],
+                       halt_min_significant_attack_prcs = defaults['halt_min_significant_attack_prcs'],
+                       halt_min_prc_improvement = defaults['halt_min_prc_improvement'],
+                       halt_check_count = defaults['halt_check_count'],
+                       prior_experiment_swap_fraction: float = -1.0,
+                       random_state: Optional[int] = None
+                       ) -> None:
+        self.df = DataFiles(
+                 df_original=df_original,
+                 anon=anon,
+                 disc_max=disc_max,
+                 disc_bins=disc_bins,
+                 discretize_in_place=discretize_in_place,
+                 random_state=random_state,
+        )
+        self.prior_experiment_swap_fraction = prior_experiment_swap_fraction     # experimental purposes
+        self.logger = logger
+        if self.logger is None:
+            logger_path = os.path.join(results_path, 'alc_manager.log')
+            self.logger = setup_logging(log_file_path=logger_path)
+        self.base_pred = BaselinePredictor()
+        self.alc = AnonymityLossCoefficient()
+        self.random_state = random_state
+        self.max_score_interval = max_score_interval
+        self.halt_thresh_low = halt_thresh_low
+        self.halt_thresh_high = halt_thresh_high
+        self.halt_interval_thresh = halt_interval_thresh
+        self.halt_min_significant_attack_prcs = halt_min_significant_attack_prcs
+        self.halt_min_prc_improvement = halt_min_prc_improvement
+        self.halt_check_count = halt_check_count
+        self.si_confidence = si_confidence
+        self.si_type = si_type
+        self.si_secret = ''
+        self.si_known_columns = []
+        self.attack_in_progress = False
+
+        self.rep = Reporter(results_path=results_path,
+                            attack_name=attack_name,
+                            logger=self.logger,
+                            flush=flush,)
+
+        # These three are used by the predictor to obtain the attacker's prediction
+        # and confidence
+        self.prediction_made = False
+        self.encoded_predicted_value = None
+        self.prediction_confidence = None
+        # This is used when an abstention is made, and the baseline prediction is used
+        self.encoded_predicted_value_model = None
+        # These contain information that the attacker can use to determine
+        # why an attack loop halted
+        self.halt_info = None
+        self.do_early_halt = False
+        # Other
+        self.start_time = None
+
+    def close_logger(self):
+        """Closes all handlers attached to the logger."""
+        if hasattr(self, 'logger') and self.logger:
+            for handler in self.logger.handlers[:]:
+                self.logger.removeHandler(handler)
+                handler.close()
+
+    def predictor(self,
+                  known_columns: List[str],
+                  secret_column: str,
+                  ) -> Generator[Tuple[pd.DataFrame, Any, Any, bool], None, None]:
+        """
+        This is the main method of the ALCManager class. It is a generator that yields
+        the rows to use in an attack. It makes one baseline prediction per loop. The
+        caller must make an attack prediction in each loop. This method determines
+        when enough predictions have been made to produce a good ALC score.
+        """
+        self.start_time = time.time()
+        self.do_early_halt = False
+        self.num_prc_measures = self.halt_min_significant_attack_prcs
+        # First check if we have already run this attack.
+        if self.rep.already_attacked(secret_column, known_columns):
+            self.logger.info(f"Already ran attack on {secret_column} with known columns {known_columns}. Skipping.")
+            self.halt_info = {'halted': True, 'reason': 'attack already run. skipping.', 'num_attacks': 0, 'halt_code': 'skip'}
+            return
+
+        # Establish the targets to ignore, if any, and make a ScoreInterval object
+        # for the halting decision.
+        ignore_value, ignore_fraction = self._get_target_to_ignore_for_halting(secret_column)
+        if ignore_value is not None:
+            if ignore_fraction == 0.0:
+                self.logger.info(f"Only one value in {secret_column}, so halt.")
+                self.halt_info = {'halted': True, 'reason': 'Only one value to attack. skipping.', 'num_attacks': 0, 'halt_code': 'one_value'}
+                return
+            decoded_ignore_value = self.decode_value(secret_column, ignore_value)
+            self.logger.info(f"The value {decoded_ignore_value} constitutes {round((100*(1-ignore_fraction)),2)} % of column {secret_column}, so we'll ignore a proportional fraction of those values in the attacks so that our results are better balanced.")
+        si_halt = ScoreInterval(si_type=self.si_type, si_confidence=self.si_confidence, max_score_interval=self.max_score_interval, logger=self.logger)
+
+        # Initialize the first set of control rows
+        self._init_cntl_and_build_model(known_columns, secret_column)
+
+        num_attacks = 0
+        self.halt_info = {'halted': False, 'reason': 'halt not yet checked', 'num_attacks': 1, 'halt_code': 'none'}
+        self.attack_in_progress = True
+        while True:
+            for i in range(len(self.df.cntl)):
+                # Get one base and attack measure at a time, and continue until we have
+                # enough confidence in the results
+                atk_row = self.df.cntl.iloc[[i]]
+
+                # For the purpose of determining if the attack prediction is True or False,
+                # we determine the true value. The decoded_true_value is the true value 
+                # after decoding from the encoding done in pre-processing
+                encoded_true_value = atk_row[secret_column].iloc[0]
+                decoded_true_value = self.decode_value(secret_column, encoded_true_value)
+
+                # Determine if the row should be ignored or not for the purpose of
+                # the halting criteria.
+                if (ignore_value is not None and
+                    encoded_true_value == ignore_value and
+                    random.random() > ignore_fraction):
+                    continue
+                num_attacks += 1
+                self._model_prediction(atk_row, secret_column, known_columns, si_halt)
+
+                # The attacker only needs to know the values of the known_columns for the
+                # purpose of running the attack, so we separate them out.
+                df_query = atk_row[known_columns]
+                self.prediction_made = False
+                yield df_query, encoded_true_value, decoded_true_value
+
+                if self.prediction_made is False:
+                    raise ValueError("Error: No prediction or abstention was made in the predictor method. The caller must call the ALCManager prediction() or abstention() method in each loop of the predictor.")
+                self.prediction_made = False
+                decoded_predicted_value = self.decode_value(secret_column, self.encoded_predicted_value)
+                self._add_result(predict_type='attack',
+                                known_columns=known_columns,
+                                secret_column=secret_column,
+                                decoded_predicted_value=decoded_predicted_value,
+                                decoded_true_value=decoded_true_value,
+                                encoded_predicted_value=self.encoded_predicted_value,
+                                encoded_true_value=encoded_true_value,
+                                attack_confidence=self.prediction_confidence,
+                                si_halt=si_halt)
+                if num_attacks % self.halt_check_count == 0:
+                    # This check is a bit expensive, so by default don't do it every time
+                    self.halt_info = self._ok_to_halt(si_halt)
+                self.halt_info.update({'num_attacks': num_attacks})
+                self.logger.debug(pp.pformat(self.halt_info))
+                end_time = time.time()
+                elapsed_time = round(end_time - self.start_time, 4)
+                self.halt_info.update({'elapsed_time': elapsed_time})
+                if self.halt_info['halted'] is True:
+                    self.attack_in_progress = False
+                    self.rep.consolidate_results(si_halt.get_alc_scores(self.num_prc_measures), self.halt_info['halt_code'], self.halt_info['elapsed_time'])
+                    return
+            is_assigned = self._next_cntl_and_build_model()
+            if is_assigned is False:
+                end_time = time.time()
+                elapsed_time = round(end_time - self.start_time, 4)
+                self.halt_info = {'halted': True, 'reason': 'exhausted all rows',  'num_attacks': num_attacks, 'halt_code': 'exhausted', 'elapsed_time': elapsed_time}
+                self.attack_in_progress = False
+                self.rep.consolidate_results(si_halt.get_alc_scores(self.num_prc_measures), self.halt_info['halt_code'], self.halt_info['elapsed_time'])
+                return
+
+    def abstention(self) -> bool:
+        ''' In an abstention, we use the baseline prediction as our best guess, and set the
+            confidence to 0.0.
+        '''
+        self.prediction_made = True
+        self.encoded_predicted_value = self.encoded_predicted_value_model
+        self.prediction_confidence = 0.0
+
+
+    def prediction(self, encoded_predicted_value: Any, prediction_confidence: float) -> None:
+        self.prediction_made = True
+        self.encoded_predicted_value = encoded_predicted_value
+        self.prediction_confidence = prediction_confidence
+
+    def results(self, known_columns: Optional[List[str]] = None,
+                      secret_column: Optional[str] = None) -> Optional[pd.DataFrame]:
+        return self.alc_per_secret_and_known_df(known_columns, secret_column)
+
+    def prediction_results(self,
+                       known_columns: Optional[List[str]] = None,
+                       secret_column: Optional[str] = None) -> Optional[pd.DataFrame]:
+        return self.get_results_df(known_columns, secret_column)
+
+    def _model_prediction(self, row: pd.DataFrame,
+                     secret_column: str,
+                     known_columns: List[str],
+                     si_halt: Optional[ScoreInterval]) -> None:
+        # get the prediction for the row
+        df_row = row[known_columns]  # This is already a DataFrame
+        encoded_predicted_value_model, proba = self.predict(df_row)
+        # We save the model prediction in case the caller makes an abstention
+        self.encoded_predicted_value_model = encoded_predicted_value_model
+        encoded_true_value = row[secret_column].iloc[0]
+        decoded_true_value = self.decode_value(secret_column, encoded_true_value)
+        if self.prior_experiment_swap_fraction > 0:
+            # Purely for experimentation and should not be used otherwise
+            encoded_predicted_value_model, _ = _best_row_attack(row, self.df.orig, secret_column, known_columns, self.get_column_classification_dict())
+            proba = 1.0
+        decoded_predicted_value_model = self.decode_value(secret_column, encoded_predicted_value_model)
+        self._add_result(predict_type='base',
+                         known_columns=known_columns,
+                         secret_column=secret_column,
+                         decoded_predicted_value=decoded_predicted_value_model,
+                         decoded_true_value=decoded_true_value,
+                         encoded_predicted_value=encoded_predicted_value_model,
+                         encoded_true_value=encoded_true_value,
+                         base_confidence=proba,
+                         si_halt=si_halt)
+
+    def _get_target_to_ignore_for_halting(self, column: str) -> Tuple[Optional[Any], Optional[float]]:
+        """
+        With respect to the halting decision, we want to ignore column values that are
+        too common because then we won't get an adequate sampling of other column values.
+        We put the threshold above 0.5 because we don't want to ignore a value in a
+        well-balanced binary column.
+
+        This version computes the normalized count of the largest normalized count.
+        If that count is > 0.6, it returns the value and (1 - count).
+        """
+        # Compute normalized value counts
+        value_counts = self.df.orig_all[column].value_counts(normalize=True)
+
+        # Find the value with the largest normalized count
+        max_value = value_counts.idxmax()
+        max_count = value_counts.max()
+
+        # Check if the largest normalized count exceeds the threshold
+        if max_count > 0.6:
+            return max_value, 1 - max_count
+
+        # If no value exceeds the threshold, return None
+        return None, None
+    
+    
+    def summarize_results(self,
+                          strong_thresh: float = 0.5,
+                          risk_thresh: float = 0.7,
+                          with_text: bool = True,
+                          with_plot: bool = True,
+                          ) -> None:
+        if self.attack_in_progress:
+            self.logger.warning("Warning: Attack is still in progress. Summarize aborted.")
+            return False
+        return self.rep.summarize_results(strong_thresh=strong_thresh,
+                                          risk_thresh=risk_thresh,
+                                          with_text=with_text,
+                                          with_plot=with_plot,
+                                          )
+    def _add_result(self,
+                   predict_type: str,
+                   known_columns: List[str],
+                   secret_column: str,
+                   decoded_predicted_value: Any,
+                   decoded_true_value: Any,
+                   encoded_predicted_value: Any,
+                   encoded_true_value: Any,
+                   base_confidence: Optional[float] = None,
+                   attack_confidence: Optional[float] = None,
+                   si_halt: Optional[ScoreInterval] = None,
+                   ) -> None:
+
+        self.rep.add_known_columns(known_columns)
+        self.rep.add_secret_column(secret_column)
+        # sort known_columns
+        known_columns = sorted(known_columns)
+        # Check if predicted_value is a numpy type
+        if isinstance(decoded_predicted_value, np.generic):
+            decoded_predicted_value = decoded_predicted_value.item()
+        if decoded_predicted_value == decoded_true_value:
+            prediction = True
+        else:
+            prediction = False
+
+        # Create a new row as a dictionary. The str() typecasting is to deal with
+        # saving as parquet later, which requires consistent types
+        row = {
+            'predict_type': predict_type,
+            'known_columns': self.rep._make_known_columns_str(known_columns),
+            'num_known_columns': len(known_columns),
+            'secret_column': secret_column,
+            'predicted_value': str(decoded_predicted_value),
+            'true_value': str(decoded_true_value),
+            'encoded_predicted_value': str(encoded_predicted_value),
+            'encoded_true_value': str(encoded_true_value),
+            'prediction': prediction,
+            'base_confidence': base_confidence,
+            'attack_confidence': attack_confidence,
+        }
+
+        self.rep.add_result(row)
+
+        confidence = base_confidence
+        if predict_type == 'attack':
+            confidence = attack_confidence
+        si_halt.add_prediction(prediction, confidence, predict_type)
+
+    def _get_significant_attack_prcs(self, alc_scores: List[Dict[str, Any]]) -> List[float]:
+        attack_prcs = []
+        alc_scores = sorted(alc_scores, key=lambda x: x['attack_recall'], reverse=True)
+        for score in alc_scores:
+            if score['attack_si'] > self.halt_interval_thresh:
+                return attack_prcs
+            attack_prcs.append(score['attack_prc'])
+        return attack_prcs
+
+    def _check_for_early_halt(self, alc_scores: List[Dict[str, Any]]) -> str:
+        early_halt_high = 0
+        early_halt_low = 0
+        for score in alc_scores:
+            if score['alc_high'] < self.halt_thresh_low:
+                early_halt_low += 1
+            elif score['alc_low'] > self.halt_thresh_high:
+                early_halt_high += 1
+            else:
+                return 'none'
+        if early_halt_high == len(alc_scores):
+            return 'high'
+        elif early_halt_low == len(alc_scores):
+            return 'low'
+        return 'none'
+
+    def _ok_to_halt(self, si_halt: ScoreInterval) -> Dict[str, Any]:
+        if len(si_halt.df_base) < 50 or len(si_halt.df_attack) < 50:
+            return {'halted': False, 'reason': f'not enough samples {len(si_halt.df_base)} base, {len(si_halt.df_attack)} attack', 'halt_code': 'none'}
+        alc_scores = si_halt.get_alc_scores(self.num_prc_measures)
+        if self.do_early_halt is False:
+            early_halt_status = self._check_for_early_halt(alc_scores)
+            if early_halt_status == 'high':
+                self.do_early_halt = True
+                return {'halted': False, 'reason': 'do extremely high', 'halt_code': 'none'}
+            elif early_halt_status == 'low':
+                self.do_early_halt = True
+                return {'halted': False, 'reason': 'do extremely low', 'halt_code': 'none'}
+        # put the values of alc_scores['paired'] into a list called paired
+        if len(alc_scores) == 0:
+            return {'halted': False, 'reason':f'no alc scores with attack and base score intervals < {self.max_score_interval} (early halt {self.do_early_halt})', 'halt_code': 'none'}
+        best_alc_score, alc_scores = si_halt.split_scores(alc_scores)
+        if best_alc_score is None:
+            return {'halted': False, 'reason':f'no prc scores with attack and base score intervals < {self.halt_interval_thresh} (early halt {self.do_early_halt})', 'halt_code': 'none'}
+
+        ret = best_alc_score
+        if self.do_early_halt is True:
+            ret.update({'halted':True, 'reason':'early halt', 'halt_code': 'early_halt'})
+            return ret
+        if ret['alc_high'] < self.halt_thresh_low:
+            ret.update({'halted':True, 'reason':'alc extremely low', 'halt_code': 'extreme_low'})
+            return ret
+        if ret['alc_low'] > self.halt_thresh_high:
+            ret.update({'halted':True, 'reason':'alc extremely high', 'halt_code': 'extreme_high'})
+            return ret
+        # We didn't halt because of extreme high or low ALC, so now we want to determine
+        # if further attacks are likely to yield a better ALC.
+        # Sort alc_scores from highest to lowest 'attack_recall'
+        sig_attack_prcs = self._get_significant_attack_prcs(alc_scores)
+        if len(sig_attack_prcs) == len(alc_scores):
+            # This occurs if all alc_scores are significant (have attack_si and
+            # base_si < halt_interval_thresh). Make sure we have 200 predictions
+            # so that we've given an adequate opportunity to get all the confidence
+            # values we're likely to get.
+            if len(si_halt.df_base) < 200 and len(si_halt.df_attack) < 200:
+                ret.update({'halted':False, 'reason':f'not enough samples to have adequate predictions when all attack prc measures {len(sig_attack_prcs)} significant (early halt {self.do_early_halt})', 'halt_code': 'none'})
+                return ret
+
+            # Check if there are simply not very many different confidence values,
+            # because if so, then more attacks aren't going to help much because we
+            # aren't likely to get more different confidence values.
+            if len(sig_attack_prcs) < self.num_prc_measures:
+                ret.update({'halted':True, 'reason':f'all {len(sig_attack_prcs)} attack prc measures significant', 'halt_code': 'all_sig'})
+                return ret
+            
+            # Check to see if we aren't making significant improvement by reducing
+            # recall. If not we halt, but if we are, we increase num_prc_measures so
+            # as to dig out still lower recall values.
+            if ((sig_attack_prcs[-1] - sig_attack_prcs[-2] >= self.halt_min_prc_improvement)
+                and (sig_attack_prcs[-2] - sig_attack_prcs[-3] >= self.halt_min_prc_improvement)
+               ): 
+                self.num_prc_measures += 1
+                ret.update({'halted':False, 'reason':f'still improving at {len(sig_attack_prcs)} significant attack prc measures (early halt {self.do_early_halt})', 'halt_code': 'none'})
+                return ret
+            ret.update({'halted':True, 'reason':f'all {len(sig_attack_prcs)} attack prc measures significant with no improvement', 'halt_code': 'no_improve_all_sig'})
+            return ret
+        # If we get here, it means that there are some PRC measures that are
+        # not yet significant. This means that we have a chance to get better
+        # PRC scores with the set of confidence values we currently have.
+
+        # Let's not give up if we don't have many significant attack prc measures.
+        if len(sig_attack_prcs) < self.halt_min_significant_attack_prcs:
+            ret.update({'halted':False, 'reason':f'too few significant attack prc measures ({len(sig_attack_prcs)}) (early halt {self.do_early_halt})', 'halt_code': 'none'})
+            return ret
+        ret.update({'halted':False, 'reason':'halt conditions not met (early halt {self.do_early_halt})', 'halt_code': 'none'})
+        return ret
+
+    # Following are the methods that use DataFiles
+    def get_pre_discretized_column(self, secret_column: str) -> str:
+        return self.df.get_pre_discretized_column(secret_column)
+
+    def get_discretized_column(self, secret_column: str) -> str:
+        return self.df.get_discretized_column(secret_column)
+
+    def decode_value(self, column: str, encoded_value: int) -> Any:
+        return self.df.decode_value(column, encoded_value)
+
+    def get_column_classification(self, column: str) -> str:
+        return self.df.get_column_classification(column)
+
+    def get_column_classification_dict(self) -> Dict:
+        return self.df.column_classification.copy()
+
+    # Following are the methods that use BasePredictor 
+    def _init_cntl_and_build_model(self, known_columns: List[str], secret_column: str,  
+                                  ) -> None:
+        is_assigned = self.df.assign_first_cntl_block()
+        if is_assigned is False:
+            raise ValueError("Error: Control block initialization failed")
+        df = self.df.orig
+        self.base_pred.build_model(df, known_columns, secret_column, self.random_state)
+        if self.prior_experiment_swap_fraction > 0:
+            # This is purely for experimentation and should not be used otherwise
+            # self.df.orig contains the sampled original data used for baseline
+            # self.df.cntl contains the samples original data used for attack
+            # So we want to anonymize self.df.orig but leave it in self.df.orig
+            self.df.orig = _swap_anonymize(self.df.orig, self.prior_experiment_swap_fraction)
+
+    def _next_cntl_and_build_model(self) -> bool:
+        is_assigned = self.df.assign_next_cntl_block()
+        if is_assigned is False:
+            return False
+        df = self.df.orig
+        self.base_pred.build_model(df)
+        if self.prior_experiment_swap_fraction > 0:
+            # This is purely for experimentation and should not be used otherwise
+            self.df.orig = _swap_anonymize(self.df.orig, self.prior_experiment_swap_fraction)
+        return True
+
+    def predict(self, df_row: pd.DataFrame) -> Tuple[Any, float]:
+        return self.base_pred.predict(df_row)
+
+    # Following are methods that use Reporter
+    def get_results_df(self,
+                       known_columns: Optional[List[str]] = None,
+                       secret_column: Optional[str] = None) -> Optional[pd.DataFrame]:
+        if self.attack_in_progress:
+            self.logger.warning("Warning: Attack is still in progress. Cannot get results.")
+            return None
+        return self.rep.get_results_df(known_columns, secret_column)
+
+    def alc_per_secret_and_known_df(self,
+                                 known_columns: Optional[List[str]] = None,
+                                 secret_column: Optional[str] = None) -> Optional[pd.DataFrame]:
+        if self.attack_in_progress:
+            self.logger.warning("Warning: Attack is still in progress. Cannot get results.")
+            return None
+        return self.rep.alc_per_secret_and_known_df(known_columns, secret_column)
+            
+
+# Everything after this gets removed after experimentation completed
+def _swap_anonymize(df: pd.DataFrame, swap_fraction: float) -> pd.DataFrame:
+    # Precompute column indices for faster access
+    column_indices = {column: df.columns.get_loc(column) for column in df.columns}
+
+    # Swap values in each column
+    for column, column_index in column_indices.items():
+        print(f"    Swapping column: {column} at {swap_fraction} fraction")
+        df = _swap_random_values(df, column_index, swap_fraction)
+    return df
+
+def _swap_random_values(df: pd.DataFrame, column_index: int, swap_fraction: float) -> pd.DataFrame:
+    """
+    Randomly swaps values in a column for a given fraction of rows.
+    """
+    num_rows = len(df)
+    num_swaps = int(num_rows * swap_fraction)
+    if num_swaps < 1:
+        return df  # Skip if there are too few rows to swap
+
+    # Select random pairs of indices to swap
+    indices = np.random.choice(num_rows, num_swaps * 2, replace=False)
+    for i in range(0, len(indices), 2):
+        idx1, idx2 = indices[i], indices[i + 1]
+        df.iloc[idx1, column_index], df.iloc[idx2, column_index] = (
+            df.iloc[idx2, column_index],
+            df.iloc[idx1, column_index],
+        )
+    return df
+
+def _best_row_attack(row: pd.DataFrame,
+                     filtered_candidates: pd.DataFrame,
+                     secret_column: str,
+                     known_columns: List[str],
+                     column_classifications: Dict[str, str],) -> Tuple[Any, float]:
+    from anonymity_loss_coefficient.utils import find_best_matches, modal_fraction, best_match_confidence
+    idx, min_gower_distance = find_best_matches(df_query=row,
+                                                df_candidates=filtered_candidates,
+                                                column_classifications=column_classifications,
+                                                columns=known_columns,
+                                                debug_on=False)
+    number_of_min_gower_distance_matches = len(idx)
+    pred_value, modal_count = modal_fraction(df_candidates=filtered_candidates,
+                                                idx=idx, column=secret_column)
+    modal_frac = modal_count / number_of_min_gower_distance_matches
+    confidence = best_match_confidence(
+                                    gower_distance=min_gower_distance,
+                                    modal_fraction=modal_frac,
+                                    match_count=number_of_min_gower_distance_matches)
+    return pred_value, confidence
